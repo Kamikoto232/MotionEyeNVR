@@ -55,3 +55,7 @@ sudo apt install g++ cmake qt6-base-dev qt6-multimedia-dev dpkg-dev
 
 Исходники: `src/` (`MotionEyeClient` — авторизация и запросы, `CameraTile` — живая картинка,
 `MosaicWidget` — раскладка, `RecordingsDialog` — записи и плеер, `SettingsDialog`, `MainWindow`).
+
+## Лицензия
+
+GPL-3.0-or-later, см. [LICENSE](LICENSE).
