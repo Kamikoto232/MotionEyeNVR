@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MotionEye NVR
+Comment=Starts the camera mosaic at login
+Exec=motioneye-nvr
+Icon=camera-video
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
+X-KDE-autostart-after=panel

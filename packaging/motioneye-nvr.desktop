@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MotionEye NVR
+Name[ru]=MotionEye NVR
+Comment=Mosaic viewer and recordings player for motionEye
+Comment[ru]=Мозаика камер и просмотр записей motionEye
+Exec=motioneye-nvr
+Icon=camera-video
+Terminal=false
+Categories=AudioVideo;Video;

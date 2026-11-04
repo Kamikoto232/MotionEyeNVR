@@ -1,0 +1,6 @@
+build/
+build-asan/
+dist/
+*.deb
+.vscode/
+.idea/
