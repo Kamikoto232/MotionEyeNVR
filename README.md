@@ -5,6 +5,8 @@
 * мозаика всех камер motionEye (2, 3 и больше — сетка подбирается под размер окна);
 * кнопка **«Записи»** на каждой камере → окно со списком записей по дням и плеером
   (пред./след., перемотка, скорость 0.5×–8×, автопереход, полный экран);
+* экономия ресурсов: камера без движения обновляется реже (по умолчанию 5 кадр/с), при движении —
+  с основной частотой (настройки «Частота при движении» / «Частота без движения»);
 * несколько серверов motionEye одновременно: локальный (`http://localhost:8765`) и удалённые;
 * автозапуск при входе в графический сеанс (`/etc/xdg/autostart`);
 * работает с motionEye ≥ 0.44 (сессия `/login`) и со старыми 0.42/0.43 (подпись `_signature`);
@@ -23,7 +25,7 @@
 ## Установка на сервере
 
 ```bash
-sudo apt install ./motioneye-nvr_1.0.0_amd64.deb
+sudo apt install ./motioneye-nvr_1.0.1_amd64.deb
 ```
 
 Подтянутся зависимости (Qt6, Qt Multimedia/FFmpeg). Автозапуск включается сам, но он срабатывает
@@ -32,7 +34,7 @@ sudo apt install ./motioneye-nvr_1.0.0_amd64.deb
 (`--fullscreen` / `--windowed`).
 
 Без пакета: скопировать `dist/motioneye-nvr` в `~/.local/bin`, поставить
-`libqt6multimedia6 libqt6widgets6 qt6-qpa-plugins`, а `packaging/motioneye-nvr-autostart.desktop`
+`libqt6multimedia6 libqt6widgets6 libturbojpeg0 qt6-qpa-plugins`, а `packaging/motioneye-nvr-autostart.desktop`
 положить в `~/.config/autostart/`.
 
 ## Использование
@@ -59,7 +61,7 @@ sudo apt install ./motioneye-nvr_1.0.0_amd64.deb
 Нужна среда Debian 13 (так бинарник совпадёт по библиотекам с целевой системой):
 
 ```bash
-sudo apt install g++ cmake qt6-base-dev qt6-multimedia-dev dpkg-dev
+sudo apt install g++ cmake qt6-base-dev qt6-multimedia-dev libturbojpeg0-dev pkg-config dpkg-dev
 ./build.sh && packaging/make-deb.sh
 ```
 

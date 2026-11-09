@@ -13,7 +13,8 @@ struct ServerConfig {
 
 struct AppConfig {
     QList<ServerConfig> servers;
-    int fps = 5;
+    int fps = 3;
+    int idleFps = 5; // rate of a camera without motion; 0 = always use `fps`
     bool fullscreen = false;
 
     static QString filePath();

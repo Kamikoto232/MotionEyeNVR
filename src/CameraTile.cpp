@@ -2,19 +2,131 @@
 
 #include "MotionEyeClient.h"
 
+#include <turbojpeg.h>
+
+#include <QBuffer>
+#include <QElapsedTimer>
+#include <cstdio>
 #include <QDateTime>
+#include <QImageReader>
 #include <QMouseEvent>
 #include <QNetworkCookie>
 #include <QNetworkReply>
 #include <QPainter>
 #include <QPushButton>
 
-CameraTile::CameraTile(MotionEyeClient *client, int cameraId, const QString &name, int fps, QWidget *parent)
+namespace {
+// Optional diagnostics: MENVR_STATS=1 prints decode/paint cost every 5 s to stderr.
+struct Stats {
+    bool on = qEnvironmentVariableIsSet("MENVR_STATS");
+    QElapsedTimer window;
+    int frames = 0, paints = 0;
+    qint64 decodeNs = 0, paintNs = 0, bytes = 0;
+    QSize src, dec;
+    bool motionKnown = false, motion = false;
+    int interval = 0;
+    void report()
+    {
+        if (!window.isValid()) {
+            window.start();
+            return;
+        }
+        const qint64 ms = window.elapsed();
+        if (ms < 5000)
+            return;
+        fprintf(stderr,
+                "[stats] %.1f frames/s, %.1f paints/s | decode %.1f ms/frame | paint %.1f ms/paint | "
+                "jpeg %lld KB/frame | source %dx%d -> decoded %dx%d | busy: decode %.0f%% paint %.0f%% | "
+                "motion cookie %s, motion %s, interval %d ms\n",
+                frames * 1000.0 / ms, paints * 1000.0 / ms, frames ? decodeNs / 1e6 / frames : 0.0,
+                paints ? paintNs / 1e6 / paints : 0.0, frames ? bytes / frames / 1024 : 0LL, src.width(),
+                src.height(), dec.width(), dec.height(), decodeNs / 1e4 / ms, paintNs / 1e4 / ms,
+                motionKnown ? "seen" : "NOT seen", motion ? "yes" : "no", interval);
+        frames = paints = 0;
+        decodeNs = paintNs = bytes = 0;
+        window.restart();
+    }
+};
+Stats g_stats;
+
+constexpr double kNearFit = 0.04; // max relative size mismatch drawn 1:1 (cropped / padded)
+
+struct TurboHandle {
+    tjhandle h = tjInitDecompress();
+    ~TurboHandle()
+    {
+        if (h)
+            tjDestroy(h);
+    }
+};
+
+// Decodes a JPEG at (about) the size it will be shown at: libjpeg-turbo scales by 1/2, 1/4, 1/8 while
+// decoding (fast DCT/upsampling), the small remainder is resized once here instead of on every paint.
+// Falls back to Qt's decoder if libjpeg-turbo cannot handle the data. `full` gets the source size.
+QImage decodeJpeg(const QByteArray &data, QSize box, QSize *full)
+{
+    static TurboHandle turbo;
+    int w = 0, h = 0, subsamp = 0, cs = 0;
+    if (turbo.h
+        && tjDecompressHeader3(turbo.h, reinterpret_cast<const unsigned char *>(data.constData()),
+                               static_cast<unsigned long>(data.size()), &w, &h, &subsamp, &cs) == 0
+        && w > 0 && h > 0) {
+        *full = QSize(w, h);
+        const QSize target = box.isValid() && !box.isEmpty() ? QSize(w, h).scaled(box, Qt::KeepAspectRatio)
+                                                              : QSize(w, h);
+        // libjpeg-turbo scales in steps of 1/8. A size within a few percent of the target is used as is
+        // (paintEvent crops or pads by a few pixels instead of resampling, which costs more than decoding);
+        // otherwise take the smallest size that is still >= target and resample it once.
+        int n = 0;
+        const tjscalingfactor *sf = tjGetScalingFactors(&n);
+        tjscalingfactor best{1, 1};
+        long bestPixels = long(w) * h;
+        bool close = false;
+        double closestErr = 1e9;
+        for (int i = 0; sf && i < n; ++i) {
+            const int sw = TJSCALED(w, sf[i]);
+            const int sh = TJSCALED(h, sf[i]);
+            const double err = qMax(qAbs(sw - target.width()) / double(qMax(1, target.width())),
+                                    qAbs(sh - target.height()) / double(qMax(1, target.height())));
+            if (err <= kNearFit && err < closestErr) {
+                closestErr = err;
+                best = sf[i];
+                close = true;
+            } else if (!close && sw >= target.width() && sh >= target.height() && long(sw) * sh < bestPixels) {
+                best = sf[i];
+                bestPixels = long(sw) * sh;
+            }
+        }
+        const int sw = TJSCALED(w, best);
+        const int sh = TJSCALED(h, best);
+        QImage img(sw, sh, QImage::Format_RGB32);
+        if (!img.isNull()
+            && tjDecompress2(turbo.h, reinterpret_cast<const unsigned char *>(data.constData()),
+                             static_cast<unsigned long>(data.size()), img.bits(), sw, int(img.bytesPerLine()), sh, TJPF_BGRX,
+                             TJFLAG_FASTDCT | TJFLAG_FASTUPSAMPLE)
+                == 0) {
+            if (!close && qAbs(sw - target.width()) > 2 && target.width() > 0 && target.height() > 0)
+                img = img.scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            return img;
+        }
+    }
+    QBuffer buf;
+    buf.setData(data);
+    buf.open(QIODevice::ReadOnly);
+    QImageReader reader(&buf, "JPEG");
+    *full = reader.size();
+    return full->isValid() ? reader.read() : QImage();
+}
+} // namespace
+
+CameraTile::CameraTile(MotionEyeClient *client, int cameraId, const QString &name, int fps, int idleFps,
+                       QWidget *parent)
     : QWidget(parent)
     , m_client(client)
     , m_cameraId(cameraId)
     , m_name(name)
     , m_frameInterval(1000 / qMax(1, fps))
+    , m_idleFrameInterval(idleFps > 0 ? qMax(1000 / idleFps, 1000 / qMax(1, fps)) : 1000 / qMax(1, fps))
     , m_recButton(new QPushButton(QStringLiteral("Записи"), this))
 {
     setMinimumSize(160, 90);
@@ -114,11 +226,11 @@ void CameraTile::fetch()
 {
     if (m_reply || !m_client)
         return;
-    const int w = qBound(320, int(width() * devicePixelRatioF()), 1920);
+    // No "width" parameter: with it motionEye (single-threaded Python) decodes, resizes and
+    // re-encodes every frame, which saturates a CPU core. Without it the JPEG is passed through.
     m_cycle.start();
     m_reply = m_client->get(QStringLiteral("/picture/%1/current/").arg(m_cameraId),
-                            {{QStringLiteral("width"), QString::number(w)},
-                             {QStringLiteral("_"), QString::number(QDateTime::currentMSecsSinceEpoch())}});
+                            {{QStringLiteral("_"), QString::number(QDateTime::currentMSecsSinceEpoch())}});
     connect(m_reply, &QNetworkReply::finished, this, &CameraTile::onFinished);
 }
 
@@ -135,10 +247,29 @@ void CameraTile::onFinished()
         fail(status ? QStringLiteral("HTTP %1").arg(status) : r->errorString());
         return;
     }
-    QImage img;
-    if (!img.loadFromData(r->readAll(), "JPEG")) {
+    // Decode straight to the on-screen size (libjpeg scales in the DCT domain, which is far
+    // cheaper than decoding full size and smooth-scaling on every paint).
+    QElapsedTimer decodeTimer;
+    if (g_stats.on)
+        decodeTimer.start();
+    const QByteArray data = r->readAll();
+    QSize full;
+    QImage img = decodeJpeg(data, innerRect().size() * devicePixelRatioF(), &full);
+    if (img.isNull()) {
         fail(QStringLiteral("Нет изображения"));
         return;
+    }
+    const QSize srcSize = full;
+    if (g_stats.on) {
+        g_stats.decodeNs += decodeTimer.nsecsElapsed();
+        ++g_stats.frames;
+        g_stats.bytes += data.size();
+        g_stats.src = full;
+        g_stats.dec = img.size();
+        g_stats.motionKnown = m_motionKnown;
+        g_stats.motion = m_motion;
+        g_stats.interval = currentInterval();
+        g_stats.report();
     }
     // motionEye flags a running motion event in a cookie of the frame response
     const QByteArray motionName = QByteArray("motion_detected_") + QByteArray::number(m_cameraId);
@@ -146,6 +277,9 @@ void CameraTile::onFinished()
     for (const QNetworkCookie &c : cookies) {
         if (c.name() == motionName) {
             const bool motion = c.value() == "true";
+            m_motionKnown = true;
+            if (motion)
+                m_lastMotion.restart();
             if (motion != m_motion) {
                 m_motion = motion;
                 update();
@@ -155,14 +289,24 @@ void CameraTile::onFinished()
     m_frame = img;
     m_fails = 0;
     layoutButton();
-    const double aspect = double(img.width()) / img.height();
+    const double aspect = double(srcSize.width()) / srcSize.height();
     if (qAbs(aspect - property("aspect").toDouble()) > 0.01) {
         setProperty("aspect", aspect); // the mosaic sizes cells by the real camera shape
         if (parentWidget())
             QMetaObject::invokeMethod(parentWidget(), "relayout");
     }
     update();
-    schedule(m_frameInterval - int(m_cycle.elapsed()));
+    schedule(currentInterval() - int(m_cycle.elapsed()));
+}
+
+// Full rate while the camera reports motion (and for a few seconds after it, so the end of an event
+// is smooth) or while we cannot tell; the slower idle rate otherwise.
+int CameraTile::currentInterval() const
+{
+    constexpr qint64 holdMs = 5000;
+    if (!m_motionKnown || m_motion || (m_lastMotion.isValid() && m_lastMotion.elapsed() < holdMs))
+        return m_frameInterval;
+    return m_idleFrameInterval;
 }
 
 void CameraTile::fail(const QString &message)
@@ -211,6 +355,19 @@ void CameraTile::layoutButton()
 
 void CameraTile::paintEvent(QPaintEvent *)
 {
+    QElapsedTimer paintTimer;
+    if (g_stats.on)
+        paintTimer.start();
+    struct PaintDone {
+        QElapsedTimer &t;
+        ~PaintDone()
+        {
+            if (g_stats.on) {
+                g_stats.paintNs += t.nsecsElapsed();
+                ++g_stats.paints;
+            }
+        }
+    } paintDone{paintTimer};
     QPainter p(this);
     p.fillRect(rect(), m_motion ? QColor(0x71, 0x27, 0x27) : QColor(0x31, 0x31, 0x31)); // frame
     const QRect inner = innerRect();
@@ -223,8 +380,21 @@ void CameraTile::paintEvent(QPaintEvent *)
     }
 
     const QRect img = imageRect();
-    p.setRenderHint(QPainter::SmoothPixmapTransform);
-    p.drawImage(img, m_frame);
+    // The frame is decoded at about the size it is shown at. If it is within a few percent, blit it
+    // 1:1 centred (crop or black padding of a few pixels) - resampling would cost more than decoding.
+    const QSize want = img.size() * devicePixelRatioF();
+    const bool near = qAbs(want.width() - m_frame.width()) <= kNearFit * want.width() + 2
+        && qAbs(want.height() - m_frame.height()) <= kNearFit * want.height() + 2;
+    if (near) {
+        p.setClipRect(img);
+        p.drawImage(QPoint(img.left() + (img.width() - m_frame.width()) / 2,
+                           img.top() + (img.height() - m_frame.height()) / 2),
+                    m_frame);
+        p.setClipping(false);
+    } else {
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.drawImage(img, m_frame);
+    }
 
     // header bar over the picture: title on the left, "Записи" button on the right
     if (m_headerVisible) {

@@ -20,7 +20,8 @@ AppConfig AppConfig::load()
     QFile f(filePath());
     if (f.open(QIODevice::ReadOnly)) {
         const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
-        cfg.fps = qBound(1, root.value(QStringLiteral("fps")).toInt(5), 25);
+        cfg.fps = qBound(1, root.value(QStringLiteral("fps")).toInt(3), 25);
+        cfg.idleFps = qBound(0, root.value(QStringLiteral("idleFps")).toInt(5), 25);
         cfg.fullscreen = root.value(QStringLiteral("fullscreen")).toBool(false);
         const QJsonArray arr = root.value(QStringLiteral("servers")).toArray();
         for (const QJsonValue &v : arr) {
@@ -57,6 +58,7 @@ bool AppConfig::save() const
                                {QStringLiteral("enabled"), s.enabled}});
     }
     const QJsonObject root{{QStringLiteral("fps"), fps},
+                           {QStringLiteral("idleFps"), idleFps},
                            {QStringLiteral("fullscreen"), fullscreen},
                            {QStringLiteral("servers"), arr}};
 

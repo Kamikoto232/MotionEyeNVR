@@ -16,7 +16,8 @@ class CameraTile : public QWidget
 {
     Q_OBJECT
 public:
-    CameraTile(MotionEyeClient *client, int cameraId, const QString &name, int fps, QWidget *parent = nullptr);
+    CameraTile(MotionEyeClient *client, int cameraId, const QString &name, int fps, int idleFps,
+               QWidget *parent = nullptr);
 
     MotionEyeClient *client() const { return m_client; }
     int cameraId() const { return m_cameraId; }
@@ -53,7 +54,11 @@ private:
     QPointer<MotionEyeClient> m_client;
     int m_cameraId;
     QString m_name;
-    int m_frameInterval;
+    int m_frameInterval;     // while motion is reported (or unknown)
+    int m_idleFrameInterval; // no motion: slower, saves CPU/power
+    QElapsedTimer m_lastMotion;
+    bool m_motionKnown = false; // the server has sent a motion cookie at least once
+    int currentInterval() const;
 
     QImage m_frame;
     QString m_status = QStringLiteral("Подключение…");

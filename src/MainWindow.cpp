@@ -169,7 +169,7 @@ void MainWindow::rebuild()
             continue;
         }
         for (const CameraInfo &ci : std::as_const(s->cameras)) {
-            auto *tile = new CameraTile(s->client, ci.id, ci.name, m_cfg.fps, m_mosaic);
+            auto *tile = new CameraTile(s->client, ci.id, ci.name, m_cfg.fps, m_cfg.idleFps, m_mosaic);
             connect(tile, &CameraTile::recordingsRequested, this, &MainWindow::openRecordings);
             tile->setHeaderVisible(m_headersVisible);
             connect(tile, &CameraTile::clicked, &m_clickTimer, qOverload<>(&QTimer::start));

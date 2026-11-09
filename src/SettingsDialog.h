@@ -36,5 +36,6 @@ private:
     QCheckBox *m_enabled;
     QLabel *m_testResult;
     QSpinBox *m_fps;
+    QSpinBox *m_idleFps;
     QCheckBox *m_fullscreen;
 };

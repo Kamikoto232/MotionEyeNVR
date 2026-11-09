@@ -28,6 +28,7 @@ SettingsDialog::SettingsDialog(const AppConfig &cfg, QWidget *parent)
     , m_enabled(new QCheckBox(QStringLiteral("Включен"), this))
     , m_testResult(new QLabel(this))
     , m_fps(new QSpinBox(this))
+    , m_idleFps(new QSpinBox(this))
     , m_fullscreen(new QCheckBox(QStringLiteral("Запускать в полноэкранном режиме"), this))
 {
     setWindowTitle(QStringLiteral("Настройки"));
@@ -38,6 +39,13 @@ SettingsDialog::SettingsDialog(const AppConfig &cfg, QWidget *parent)
     m_fps->setRange(1, 25);
     m_fps->setValue(cfg.fps);
     m_fps->setSuffix(QStringLiteral(" кадр/с"));
+    m_idleFps->setRange(0, 25);
+    m_idleFps->setValue(cfg.idleFps);
+    m_idleFps->setSuffix(QStringLiteral(" кадр/с"));
+    m_idleFps->setSpecialValueText(QStringLiteral("как при движении"));
+    m_idleFps->setToolTip(QStringLiteral(
+        "Камеры, на которых motionEye не видит движения, обновляются реже — это снижает нагрузку, "
+        "нагрев и энергопотребление. При движении частота возвращается к основной."));
     m_fullscreen->setChecked(cfg.fullscreen);
     m_testResult->setWordWrap(true);
 
@@ -67,7 +75,8 @@ SettingsDialog::SettingsDialog(const AppConfig &cfg, QWidget *parent)
     cols->addLayout(form, 2);
 
     auto *general = new QFormLayout;
-    general->addRow(QStringLiteral("Частота обновления камер"), m_fps);
+    general->addRow(QStringLiteral("Частота при движении"), m_fps);
+    general->addRow(QStringLiteral("Частота без движения"), m_idleFps);
     general->addRow(QString(), m_fullscreen);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -104,6 +113,7 @@ AppConfig SettingsDialog::result() const
 {
     AppConfig out = m_cfg;
     out.fps = m_fps->value();
+    out.idleFps = m_idleFps->value();
     out.fullscreen = m_fullscreen->isChecked();
     return out;
 }
