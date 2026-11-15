@@ -42,6 +42,11 @@ static void cleanStaleCache()
 
 int main(int argc, char *argv[])
 {
+    // FFmpeg tries VA-API first; when the driver can't init it falls back to software decoding
+    // and only prints a harmless "libva ... init failed" line. Keep the console quiet.
+    if (!qEnvironmentVariableIsSet("LIBVA_MESSAGING_LEVEL"))
+        qputenv("LIBVA_MESSAGING_LEVEL", "0");
+
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("motioneye-nvr"));
     app.setApplicationVersion(QStringLiteral(APP_VERSION));

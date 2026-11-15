@@ -55,9 +55,11 @@ private:
     void releaseCurrentFile();
     void seekRelative(qint64 ms);
     void updateTime();
+    void saveClip();
 
     QPointer<MotionEyeClient> m_client;
     int m_cameraId;
+    QString m_title;
 
     QTreeWidget *m_tree;
     QLabel *m_status;
@@ -69,6 +71,7 @@ private:
     QPushButton *m_playBtn;
     QComboBox *m_speed;
     QCheckBox *m_autoNext;
+    QPushButton *m_saveBtn;
 
     QVector<Clip> m_clips; // chronological
     QVector<QTreeWidgetItem *> m_items; // parallel to m_clips

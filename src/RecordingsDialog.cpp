@@ -5,6 +5,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -18,6 +19,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QMouseEvent>
 #include <QShortcut>
 #include <QSlider>
@@ -80,6 +82,7 @@ RecordingsDialog::RecordingsDialog(MotionEyeClient *client, int cameraId, const 
     : QDialog(parent, Qt::Window)
     , m_client(client)
     , m_cameraId(cameraId)
+    , m_title(title)
     , m_tree(new QTreeWidget(this))
     , m_status(new QLabel(this))
     , m_progress(new QProgressBar(this))
@@ -90,6 +93,7 @@ RecordingsDialog::RecordingsDialog(MotionEyeClient *client, int cameraId, const 
     , m_playBtn(new QPushButton(this))
     , m_speed(new QComboBox(this))
     , m_autoNext(new QCheckBox(QStringLiteral("Автопереход к следующей"), this))
+    , m_saveBtn(new QPushButton(QStringLiteral("Сохранить"), this))
     , m_tmp(cacheRoot() + QStringLiteral("/clip-XXXXXX"))
 {
     setWindowTitle(QStringLiteral("Записи — %1").arg(title));
@@ -126,6 +130,8 @@ RecordingsDialog::RecordingsDialog(MotionEyeClient *client, int cameraId, const 
         m_speed->addItem(QStringLiteral("%1×").arg(rate), rate);
     m_speed->setCurrentIndex(1);
     m_autoNext->setChecked(true);
+    m_saveBtn->setToolTip(QStringLiteral("Сохранить текущую запись в файл"));
+    m_saveBtn->setEnabled(false); // until the clip is downloaded
     m_progress->setRange(0, 100);
     m_progress->hide();
 
@@ -143,7 +149,11 @@ RecordingsDialog::RecordingsDialog(MotionEyeClient *client, int cameraId, const 
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->addWidget(m_video, 1);
     rightLayout->addLayout(controls);
-    rightLayout->addWidget(m_autoNext);
+    auto *belowControls = new QHBoxLayout; // "Save" sits under "На весь экран"
+    belowControls->addWidget(m_autoNext);
+    belowControls->addStretch(1);
+    belowControls->addWidget(m_saveBtn);
+    rightLayout->addLayout(belowControls);
     rightLayout->addWidget(m_progress);
     rightLayout->addWidget(m_status);
 
@@ -177,6 +187,7 @@ RecordingsDialog::RecordingsDialog(MotionEyeClient *client, int cameraId, const 
     connect(prev, &QPushButton::clicked, this, [this] { stepClip(-1); });
     connect(next, &QPushButton::clicked, this, [this] { stepClip(+1); });
     connect(full, &QPushButton::clicked, this, [this] { m_video->setFullScreen(true); });
+    connect(m_saveBtn, &QPushButton::clicked, this, &RecordingsDialog::saveClip);
     connect(m_playBtn, &QPushButton::clicked, this, [this] {
         if (m_player->playbackState() == QMediaPlayer::PlayingState)
             m_player->pause();
@@ -412,8 +423,59 @@ void RecordingsDialog::abortDownload()
     m_progress->hide();
 }
 
+void RecordingsDialog::saveClip()
+{
+    if (m_playingFile.isEmpty() || m_current < 0 || m_current >= m_clips.size())
+        return;
+    const QString src = m_playingFile;
+    const int seq = m_seq;
+    const Clip clip = m_clips[m_current];
+
+    // pause so that auto-advance cannot replace (and delete) the file while the dialog is open
+    const bool wasPlaying = m_player->playbackState() == QMediaPlayer::PlayingState;
+    if (wasPlaying)
+        m_player->pause();
+
+    QSettings settings(QStringLiteral("motioneye-nvr"), QStringLiteral("motioneye-nvr"));
+    QString dir = settings.value(QStringLiteral("saveDir")).toString();
+    if (dir.isEmpty() || !QDir(dir).exists())
+        dir = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    if (dir.isEmpty() || !QDir(dir).exists())
+        dir = QDir::homePath();
+
+    QString base = m_title;
+    base.replace(QRegularExpression(QStringLiteral("[^\\w\\-]+"), QRegularExpression::UseUnicodePropertiesOption),
+                 QStringLiteral("_"));
+    QString suffix = QFileInfo(clip.path).suffix();
+    if (suffix.isEmpty())
+        suffix = QStringLiteral("mp4");
+    const QString name = QStringLiteral("%1_%2.%3").arg(base, clip.when.toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss")), suffix);
+
+    const QString dest = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Сохранить запись"), QDir(dir).filePath(name),
+        QStringLiteral("Видео (*.%1);;Все файлы (*)").arg(suffix));
+
+    if (!dest.isEmpty()) {
+        settings.setValue(QStringLiteral("saveDir"), QFileInfo(dest).absolutePath());
+        if (!QFile::exists(src) || seq != m_seq) {
+            m_status->setText(QStringLiteral("Запись уже сменилась, сохранять нечего"));
+        } else {
+            // the dialog already asked about overwriting
+            if (QFile::exists(dest))
+                QFile::remove(dest);
+            QFile in(src);
+            m_status->setText(in.copy(dest) ? QStringLiteral("Сохранено: %1").arg(dest)
+                                            : QStringLiteral("Не удалось сохранить: %1").arg(in.errorString()));
+        }
+    }
+
+    if (wasPlaying && seq == m_seq && !m_playingFile.isEmpty())
+        m_player->play();
+}
+
 void RecordingsDialog::releaseCurrentFile()
 {
+    m_saveBtn->setEnabled(false);
     m_player->stop();
     m_player->setSource(QUrl());
     if (!m_playingFile.isEmpty()) {
@@ -501,6 +563,7 @@ void RecordingsDialog::downloadFinished()
         return;
     }
     m_playingFile = file;
+    m_saveBtn->setEnabled(true);
     m_status->setText(m_clips[m_current].when.toString(QStringLiteral("dd.MM.yyyy HH:mm:ss")));
     m_player->setSource(QUrl::fromLocalFile(file));
     m_player->setPlaybackRate(m_speed->currentData().toDouble());
